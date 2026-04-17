@@ -62,7 +62,7 @@ class AIChatController extends Controller
             'followup_question' => null,
         ];
 
-        $aiStructuredData = $this->githubModelsService->extractStructuredData($message);
+        $aiStructuredData = $this->githubModelsService->extractStructuredData($message, $conversationMessages);
         $ruleStructuredData = $this->extractDetailsFromMessageRules($message);
 
         $mergedStructuredData = $this->mergeStructuredData(
@@ -118,7 +118,7 @@ class AIChatController extends Controller
             $mergedStructuredData['last_requested_field'] = null;
 
             $matches = $this->findMatches($mergedStructuredData);
-            $assistantReply = $this->buildAssistantReply($mergedStructuredData, $matches);
+            $assistantReply = $this->buildAssistantReply($message, $mergedStructuredData, $matches);
         }
 
         $conversationMessages[] = [
@@ -708,7 +708,7 @@ class AIChatController extends Controller
     private function findMatches(array $structuredData): array
     {
         $items = Item::query()
-            ->whereIn('status', ['active', 'pending', 'claim pending'])
+            ->where('status', 'active')
             ->get();
 
         $scored = $items->map(function (Item $item) use ($structuredData): array {
@@ -717,14 +717,15 @@ class AIChatController extends Controller
             return [
                 'id' => $item->id,
                 'name' => $item->name,
-                'description' => null,
+                'description' => $item->description,
                 'category' => $item->category,
-                'color' => null,
-                'brand' => null,
+                'color' => $item->color,
+                'brand' => $item->brand,
                 'location' => $item->location,
                 'finder_id' => null,
                 'owner_id' => null,
                 'found_at' => $item->found_at,
+                'image_url' => $item->image_url,
                 'similarity_score' => $score,
             ];
         });
@@ -836,16 +837,353 @@ class AIChatController extends Controller
     /**
      * Builds the assistant reply shown to the user.
      *
+     * @param string $userMessage the user message
      * @param array<string, mixed> $structuredData extracted search data
      * @param array<int, array<string, mixed>> $matches match results
      * @return string
      */
-    private function buildAssistantReply(array $structuredData, array $matches): string
+    private function buildAssistantReply(string $userMessage, array $structuredData, array $matches): string
     {
         if (count($matches) === 0) {
             return 'I could not find a strong match with the details provided. You can try adding more details if you remember them later.';
         }
 
-        return 'I found some possible matches. Only general public details are shown below.';
+        $detailsText = $this->formatSearchDetails($structuredData);
+        $matchCount = count($matches);
+        $matchText = $matchCount === 1 ? 'match' : 'matches';
+
+        $summary = "I found {$matchCount} possible {$matchText} based on your description: {$detailsText}\n\nHere are the items:";
+
+        foreach ($matches as $idx => $match) {
+            $matchNumber = $idx + 1;
+            $score = round($match['similarity_score'], 0);
+            $summary .= "\n\n#{$matchNumber} - {$match['name']} (Category: {$match['category']}) - {$score}% match";
+            if (!empty($match['location'])) {
+                $summary .= " (Found at: {$match['location']})";
+            }
+            if (!empty($match['found_at'])) {
+                $foundTime = date('M d, Y', strtotime($match['found_at']));
+                $summary .= " on {$foundTime}";
+            }
+        }
+
+        $summary .= "\n\nOnly general public details are shown. Click on items to see full information.";
+
+        return $summary;
+    }
+
+    /**
+     * Formats the structured search details into a readable string.
+     *
+     * @param array<string, mixed> $structuredData extracted search data
+     * @return string
+     */
+    private function formatSearchDetails(array $structuredData): string
+    {
+        $details = [];
+
+        if (!empty($structuredData['category'])) {
+            $details[] = "a {$structuredData['category']}";
+        }
+
+        if (!empty($structuredData['color'])) {
+            $details[] = $structuredData['color'];
+        }
+
+        if (!empty($structuredData['lost_time'])) {
+            $details[] = "lost in the {$structuredData['lost_time']}";
+        }
+
+        if (!empty($structuredData['location'])) {
+            $details[] = "at {$structuredData['location']}";
+        }
+
+        if (!empty($structuredData['brand'])) {
+            $details[] = "{$structuredData['brand']} brand";
+        }
+
+        if (!empty($structuredData['attributes']) && is_array($structuredData['attributes']) && count($structuredData['attributes']) > 0) {
+            $attrs = implode(', ', $structuredData['attributes']);
+            $details[] = "with features: {$attrs}";
+        }
+
+        return implode(', ', $details) ?: 'your item';
+    }
+
+    /**
+     * Searches for items by image similarity.
+     *
+     * @param Request $request the HTTP request with image file
+     * @return JsonResponse
+     */
+    public function searchByImage(Request $request): JsonResponse
+    {
+        $request->validate([
+            'image' => 'required|image|max:10240',
+            'category' => 'required|string|max:255',
+        ]);
+
+        try {
+            $category = $request->string('category')->value();
+
+            // Get all items with images matching the category
+            $items = Item::where('image_url', '!=', null)
+                ->where('status', 'active')
+                ->where('category', $category)
+                ->with(['finder', 'owner'])
+                ->get();
+
+            if ($items->isEmpty()) {
+                return response()->json([
+                    'structured_data' => null,
+                    'matches' => [],
+                    'assistant_reply' => 'No items found in the database. Please describe your lost item instead.',
+                    'conversation_messages' => [],
+                ]);
+            }
+
+            // Extract dominant colors from uploaded image
+            $uploadedImageMimeType = $request->file('image')->getMimeType();
+            $uploadedImagePath = $request->file('image')->getRealPath();
+            
+            // Get colors from uploaded image (simplified approach)
+            $uploadedColors = $this->extractDominantColors($uploadedImagePath);
+
+            // Score each item based on color similarity
+            $scoredItems = [];
+            foreach ($items as $item) {
+                // Extract colors from item image URL
+                // For simplicity, we'll use a basic matching based on item attributes
+                $score = $this->calculateImageSimilarity($uploadedColors, $item);
+                
+                if ($score >= 60) {
+                    $scoredItems[] = [
+                        'item' => $item,
+                        'score' => $score,
+                    ];
+                }
+            }
+
+            // Sort by score descending
+            usort($scoredItems, fn($a, $b) => $b['score'] <=> $a['score']);
+
+            // Get top 5 matches
+            $topMatches = array_slice($scoredItems, 0, 5);
+            $matches = array_map(fn($match) => $match['item'], $topMatches);
+
+            $matchCount = count($matches);
+            $assistantReply = $matchCount > 0
+                ? "Found {$matchCount} possible match" . ($matchCount !== 1 ? 'es' : '') . " based on image analysis."
+                : 'No similar items found. Please describe your lost item in more detail.';
+
+            return response()->json([
+                'structured_data' => [
+                    'item_type' => null,
+                    'category' => null,
+                    'color' => null,
+                    'brand' => null,
+                    'location' => null,
+                    'lost_time' => null,
+                    'keywords' => [],
+                    'attributes' => [],
+                    'skipped_fields' => [],
+                    'last_requested_field' => null,
+                    'needs_followup' => false,
+                    'followup_question' => null,
+                ],
+                'matches' => $matches,
+                'assistant_reply' => $assistantReply,
+                'conversation_messages' => [],
+            ]);
+        } catch (\Exception $e) {
+            \Log::error('Image search failed', ['error' => $e->getMessage()]);
+            return response()->json([
+                'message' => 'Image search failed.',
+                'error' => $e->getMessage(),
+            ], 422);
+        }
+    }
+
+    /**
+     * Extracts dominant colors from an image.
+     *
+     * @param string $imagePath path to the image file
+     * @return array<string> array of dominant color hex values
+     */
+    private function extractDominantColors(string $imagePath): array
+    {
+        // Simplified color extraction
+        // In production, you might use a library like imagine or opencv
+        $colors = [];
+        
+        if (function_exists('imagecreatefromjpeg') || function_exists('imagecreatefrompng')) {
+            try {
+                $image = $this->createImageFromFile($imagePath);
+                if ($image) {
+                    // Sample 10 random pixels to estimate color palette
+                    $width = imagesx($image);
+                    $height = imagesy($image);
+                    
+                    for ($i = 0; $i < 10; $i++) {
+                        $x = rand(0, $width - 1);
+                        $y = rand(0, $height - 1);
+                        $rgb = imagecolorat($image, $x, $y);
+                        $colors[] = $this->rgbToHex($rgb);
+                    }
+                    
+                    imagedestroy($image);
+                }
+            } catch (\Exception) {
+                // Fallback: return empty colors
+            }
+        }
+        
+        return $colors ?: ['#808080']; // Default gray if extraction fails
+    }
+
+    /**
+     * Creates an image resource from file.
+     *
+     * @param string $filePath path to image file
+     * @return \GdImage|false
+     */
+    private function createImageFromFile(string $filePath)
+    {
+        $mimeType = mime_content_type($filePath);
+        
+        if ($mimeType === 'image/jpeg') {
+            return imagecreatefromjpeg($filePath);
+        } elseif ($mimeType === 'image/png') {
+            return imagecreatefrompng($filePath);
+        } elseif ($mimeType === 'image/gif') {
+            return imagecreatefromgif($filePath);
+        } elseif ($mimeType === 'image/webp') {
+            return imagecreatefromwebp($filePath);
+        }
+        
+        return false;
+    }
+
+    /**
+     * Converts RGB color value to hex string.
+     *
+     * @param int $rgb RGB color value
+     * @return string hex color string
+     */
+    private function rgbToHex(int $rgb): string
+    {
+        return '#' . str_pad(dechex($rgb), 6, '0', STR_PAD_LEFT);
+    }
+
+    /**
+     * Calculates similarity score between uploaded image colors and an item.
+     *
+     * @param array<string> $uploadedColors dominant colors from uploaded image
+     * @param Item $item the item to score
+     * @return int similarity score (0-100)
+     */
+    private function calculateImageSimilarity(array $uploadedColors, Item $item): int
+    {
+        $score = 0;
+        
+        // Base score if item has image and is active
+        if (!$item->image_url || $item->status !== 'active') {
+            return 0; // No match if no image or not active
+        }
+        
+        $score = 60; // Base score for matching category + active status + has image
+        
+        // Color similarity matching (40 points max for color)
+        if (!empty($uploadedColors) && $uploadedColors[0] !== '#808080') {
+            $itemColor = $item->color;
+            
+            if ($itemColor) {
+                // Try to match with item's recorded color
+                $colorScore = $this->getColorSimilarityScore($uploadedColors[0], $itemColor);
+                $score += min($colorScore / 2, 40); // Max 40 points from color similarity
+            }
+        }
+        
+        return min($score, 100); // Cap at 100
+    }
+
+    /**
+     * Gets similarity score for two colors (0-100, higher is more similar).
+     *
+     * @param string $hex1 hex color (e.g., "#FF0000")
+     * @param string $colorName color name or description
+     * @return int similarity score
+     */
+    private function getColorSimilarityScore(string $hex1, string $colorName): int
+    {
+        $colorName = strtolower(trim($colorName));
+        $rgb1 = $this->hexToRgb($hex1);
+        
+        // Map common color names to RGB ranges
+        $commonColors = [
+            'black' => ['r' => 0, 'g' => 0, 'b' => 0],
+            'white' => ['r' => 255, 'g' => 255, 'b' => 255],
+            'red' => ['r' => 255, 'g' => 0, 'b' => 0],
+            'green' => ['r' => 0, 'g' => 128, 'b' => 0],
+            'blue' => ['r' => 0, 'g' => 0, 'b' => 255],
+            'yellow' => ['r' => 255, 'g' => 255, 'b' => 0],
+            'gray' => ['r' => 128, 'g' => 128, 'b' => 128],
+            'grey' => ['r' => 128, 'g' => 128, 'b' => 128],
+            'brown' => ['r' => 165, 'g' => 42, 'b' => 42],
+            'orange' => ['r' => 255, 'g' => 165, 'b' => 0],
+            'purple' => ['r' => 128, 'g' => 0, 'b' => 128],
+            'pink' => ['r' => 255, 'g' => 192, 'b' => 203],
+            'silver' => ['r' => 192, 'g' => 192, 'b' => 192],
+            'gold' => ['r' => 255, 'g' => 215, 'b' => 0],
+        ];
+        
+        // Check if color name contains any known color
+        foreach ($commonColors as $colorKey => $colorRgb) {
+            if (strpos($colorName, $colorKey) !== false) {
+                return $this->calculateColorDistance($rgb1, $colorRgb);
+            }
+        }
+        
+        // If no color name match, return moderate score
+        return 50;
+    }
+
+    /**
+     * Calculates Euclidean distance between two RGB colors.
+     *
+     * @param array<string, int> $rgb1 RGB color 1
+     * @param array<string, int> $rgb2 RGB color 2
+     * @return int distance score (0-100, higher = more similar)
+     */
+    private function calculateColorDistance(array $rgb1, array $rgb2): int
+    {
+        $distance = sqrt(
+            pow($rgb1['r'] - $rgb2['r'], 2) +
+            pow($rgb1['g'] - $rgb2['g'], 2) +
+            pow($rgb1['b'] - $rgb2['b'], 2)
+        );
+        
+        // Max distance is sqrt(3 * 255^2) ≈ 441
+        // Convert to 0-100 scale (higher = more similar)
+        $similarity = max(0, 100 - ($distance / 441 * 100));
+        
+        return (int) $similarity;
+    }
+
+    /**
+     * Converts hex color to RGB array.
+     *
+     * @param string $hex hex color string
+     * @return array<string, int>
+     */
+    private function hexToRgb(string $hex): array
+    {
+        $hex = str_replace('#', '', $hex);
+        
+        return [
+            'r' => (int) hexdec(substr($hex, 0, 2)),
+            'g' => (int) hexdec(substr($hex, 2, 2)),
+            'b' => (int) hexdec(substr($hex, 4, 2)),
+        ];
     }
 }

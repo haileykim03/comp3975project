@@ -7,12 +7,22 @@ use Illuminate\Support\Str;
 
 class GithubModelsService
 {
-    public function extractStructuredData(string $userMessage): array
+    public function extractStructuredData(string $userMessage, array $conversationHistory = []): array
     {
+        $contextNote = '';
+        if (!empty($conversationHistory)) {
+            $contextNote = "\n\nPrevious conversation context:\n";
+            foreach (array_slice($conversationHistory, -4) as $msg) {
+                $role = $msg['role'] === 'assistant' ? 'Assistant' : 'User';
+                $contextNote .= "{$role}: {$msg['content']}\n";
+            }
+            $contextNote .= "\nUse this context to understand what the user previously mentioned about their lost item.";
+        }
+
         $systemPrompt = <<<PROMPT
 You are an assistant for a university lost-and-found system.
 
-Extract structured data from the user's message.
+Extract structured data from the user's message. Pay attention to details they mentioned earlier in the conversation.{$contextNote}
 
 Return ONLY JSON:
 {

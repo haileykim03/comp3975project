@@ -112,7 +112,7 @@ function PublicMatchedItems({
                 return;
             }
 
-            setClaimMessage('Claim submitted successfully.');
+            setClaimMessage('Claim submitted successfully. Please contact 778-123-4567 or visit the SE12-325 Lost & Found office to complete the process.');
         } catch (error) {
             console.error(error);
             setClaimMessage('Something went wrong while submitting your claim.');

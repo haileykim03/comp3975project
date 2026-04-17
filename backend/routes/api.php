@@ -17,6 +17,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('logout', [AuthController::class, 'logout']);
 
     Route::post('ai/chat', [AIChatController::class, 'chat']);
+    Route::post('ai/search-by-image', [AIChatController::class, 'searchByImage']);
     Route::post('items/{id}/claim', [ItemController::class, 'claim']);
 });
 

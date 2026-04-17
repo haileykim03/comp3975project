@@ -40,4 +40,10 @@ return [
         'url' => env('GITHUB_MODELS_URL'),
         'model' => env('GITHUB_MODELS_MODEL', 'openai/gpt-4.1'),
     ],
+
+    'cloudinary' => [
+        'cloud_name' => env('CLOUDINARY_CLOUD_NAME'),
+        'api_key' => env('CLOUDINARY_API_KEY'),
+        'api_secret' => env('CLOUDINARY_API_SECRET'),
+    ],
 ];

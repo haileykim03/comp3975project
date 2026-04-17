@@ -1,0 +1,53 @@
+name: Build and deploy PHP app to Azure Web App - lost-and-found
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+
+      - name: Install Composer dependencies
+        run: |
+          cd backend
+          composer validate --no-check-publish
+          composer install --no-dev --optimize-autoloader --prefer-dist --no-progress
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build Laravel Vite assets
+        run: |
+          cd backend
+          npm install
+          npm run build
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_ACB63C7FBC3C4D35A05AB5100ED8D7B3 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_49FEE1C106584F37A0461948EAAA6C2D }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_521B9393E7B94945B1E2504CAA0A766F }}
+
+      - name: Deploy backend to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: 'lost-and-found'
+          slot-name: 'Production'
+          package: backend

@@ -24,6 +24,7 @@ type Item = {
   owner_id: number | null;
   status: 'pending' | 'active' | 'claim pending' | 'returned';
   found_at: string | null;
+  image_url?: string | null;
 };
 
 const locationOptions = [
@@ -140,6 +141,9 @@ function MyAddedItemsPage() {
   const [brand, setBrand] = useState('');
   const [location, setLocation] = useState(locationOptions[0]);
   const [foundAt, setFoundAt] = useState('');
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState('');
+  const [imageError, setImageError] = useState('');
 
   const [modalError, setModalError] = useState('');
   const [modalSuccess, setModalSuccess] = useState('');
@@ -203,12 +207,62 @@ function MyAddedItemsPage() {
     setFoundAt(formatForDateTimeInput(item.found_at));
     setModalError('');
     setModalSuccess('');
+    setImageFile(null);
+    if (imagePreview.startsWith('blob:')) {
+      URL.revokeObjectURL(imagePreview);
+    }
+    setImagePreview(item.image_url || '');
   };
 
   const handleCloseModal = () => {
     setSelectedItem(null);
     setModalError('');
     setModalSuccess('');
+    setImageFile(null);
+    if (imagePreview.startsWith('blob:')) {
+      URL.revokeObjectURL(imagePreview);
+    }
+    setImagePreview('');
+  };
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null;
+    setImageError('');
+
+    if (!file) {
+      setImageFile(null);
+      if (imagePreview.startsWith('blob:')) {
+        URL.revokeObjectURL(imagePreview);
+      }
+      setImagePreview(selectedItem?.image_url || '');
+      return;
+    }
+
+    if (!file.type.startsWith('image/')) {
+      setImageError('Please select a valid image file.');
+      setImageFile(null);
+      if (imagePreview.startsWith('blob:')) {
+        URL.revokeObjectURL(imagePreview);
+      }
+      setImagePreview(selectedItem?.image_url || '');
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setImageError('Image file size must be 10MB or smaller.');
+      setImageFile(null);
+      if (imagePreview.startsWith('blob:')) {
+        URL.revokeObjectURL(imagePreview);
+      }
+      setImagePreview(selectedItem?.image_url || '');
+      return;
+    }
+
+    setImageFile(file);
+    if (imagePreview.startsWith('blob:')) {
+      URL.revokeObjectURL(imagePreview);
+    }
+    setImagePreview(URL.createObjectURL(file));
   };
 
   const handleUpdateItem = async () => {
@@ -221,28 +275,58 @@ function MyAddedItemsPage() {
       setModalError('');
       setModalSuccess('');
 
+      const formData = new FormData();
+      formData.append('name', name);
+      formData.append('description', description || '');
+      formData.append('category', category);
+      formData.append('color', color || '');
+      formData.append('brand', brand || '');
+      formData.append('location', location);
+      formData.append('finder_id', String(selectedItem.finder_id ?? ''));
+      if (selectedItem.owner_id !== null) {
+        formData.append('owner_id', String(selectedItem.owner_id));
+      }
+      formData.append('status', selectedItem.status);
+      formData.append('found_at', foundAt || '');
+      if (imageFile) {
+        formData.append('image', imageFile);
+      }
+
+      const headers: Record<string, string> = {
+        Accept: 'application/json',
+      };
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
       const response = await fetch(`${import.meta.env.VITE_API_URL}/api/items/${selectedItem.id}`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          Authorization: token ? `Bearer ${token}` : '',
-        },
-        body: JSON.stringify({
-          name,
-          description: description || null,
-          category,
-          color: color || null,
-          brand: brand || null,
-          location,
-          finder_id: selectedItem.finder_id,
-          owner_id: selectedItem.owner_id,
-          status: selectedItem.status,
-          found_at: foundAt || null,
-        }),
+        headers,
+        body: formData,
       });
 
-      const data = await response.json();
+      const responseText = await response.text();
+      let data = null;
+      try {
+        data = responseText ? JSON.parse(responseText) : null;
+      } catch {
+        data = null;
+      }
+
+      if (!response.ok) {
+        console.error('Update item failed:', response.status, responseText, data);
+        if (data?.errors) {
+          const firstError = Object.values(data.errors)[0];
+          if (Array.isArray(firstError) && firstError.length > 0) {
+            setModalError(firstError[0] as string);
+          } else {
+            setModalError(data.message || 'Failed to update item.');
+          }
+        } else {
+          setModalError(data?.message || responseText || 'Failed to update item.');
+        }
+        return;
+      }
 
       if (!response.ok) {
         if (data.errors) {
@@ -258,7 +342,7 @@ function MyAddedItemsPage() {
         return;
       }
 
-      const updatedItem = data.data;
+      const updatedItem = data.data ?? data;
 
       setItems((prevItems) =>
         prevItems.map((item) =>
@@ -414,12 +498,6 @@ function MyAddedItemsPage() {
               </div>
             )}
 
-            {modalSuccess && (
-              <div className="alert alert-success mb-3">
-                {modalSuccess}
-              </div>
-            )}
-
             <div className="mb-3">
               <label className="form-label text-primaryLight fw-semibold">
                 Item Name
@@ -504,18 +582,36 @@ function MyAddedItemsPage() {
               />
             </div>
 
-            <div className="mb-4">
+            <div className="mb-3">
               <label className="form-label text-primaryLight fw-semibold">
-                Description
+                Item Photo
               </label>
-              <textarea
+              <input
+                type="file"
+                accept="image/*"
                 className="form-control custom-input"
-                rows={4}
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Optional notes for admin review"
+                onChange={handleImageChange}
               />
+              {imageError && (
+                <div className="text-danger small mt-2">
+                  {imageError}
+                </div>
+              )}
+              {imagePreview && (
+                <img
+                  src={imagePreview}
+                  alt="Item preview"
+                  className="img-fluid rounded mt-3"
+                  style={{ maxHeight: '220px' }}
+                />
+              )}
             </div>
+
+            {modalSuccess && (
+              <div className="alert alert-success mb-3">
+                {modalSuccess}
+              </div>
+            )}
 
             <div className="d-flex justify-content-end gap-2">
               <button

@@ -46,6 +46,9 @@ function AddItemPage() {
     const [brand, setBrand] = useState('');
     const [location, setLocation] = useState(locationOptions[0]);
     const [foundAt, setFoundAt] = useState('');
+    const [imageFile, setImageFile] = useState<File | null>(null);
+    const [imagePreview, setImagePreview] = useState('');
+    const [imageError, setImageError] = useState('');
 
     const [error, setError] = useState('');
     const [successMessage, setSuccessMessage] = useState('');
@@ -65,6 +68,58 @@ function AddItemPage() {
         setBrand('');
         setLocation(locationOptions[0]);
         setFoundAt('');
+        setImageFile(null);
+        if (imagePreview.startsWith('blob:')) {
+            URL.revokeObjectURL(imagePreview);
+        }
+        setImagePreview('');
+    };
+
+    const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0] ?? null;
+        setImageError('');
+
+        if (!file) {
+            setImageFile(null);
+            if (imagePreview.startsWith('blob:')) {
+                URL.revokeObjectURL(imagePreview);
+            }
+            setImagePreview('');
+            return;
+        }
+
+        if (!file.type.startsWith('image/')) {
+            setImageError('Please select a valid image file.');
+            setImageFile(null);
+            if (imagePreview.startsWith('blob:')) {
+                URL.revokeObjectURL(imagePreview);
+            }
+            setImagePreview('');
+            return;
+        }
+
+        if (file.size > 10 * 1024 * 1024) {
+            setImageError('Image file size must be 10MB or smaller.');
+            setImageFile(null);
+            if (imagePreview.startsWith('blob:')) {
+                URL.revokeObjectURL(imagePreview);
+            }
+            setImagePreview('');
+            return;
+        }
+
+        setImageFile(file);
+        if (imagePreview.startsWith('blob:')) {
+            URL.revokeObjectURL(imagePreview);
+        }
+        setImagePreview(URL.createObjectURL(file));
+
+        console.log('Selected image file:', {
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            lastModified: file.lastModified,
+        });
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -82,32 +137,55 @@ function AddItemPage() {
             return;
         }
 
+        if (imageError) {
+            setError(imageError);
+            return;
+        }
+
         try {
             setIsSubmitting(true);
 
+            console.log('Submitting form with imageFile:', imageFile);
+
+            const formData = new FormData();
+            formData.append('name', name);
+            formData.append('description', description || '');
+            formData.append('category', category);
+            formData.append('color', color || '');
+            formData.append('brand', brand || '');
+            formData.append('location', location);
+            formData.append('finder_id', String(currentUser.id));
+            formData.append('found_at', foundAt || '');
+            if (imageFile) {
+                formData.append('image', imageFile);
+            }
+
+            console.log('FormData image entry:', formData.get('image'));
+
+            const headers: Record<string, string> = {
+                Accept: 'application/json',
+            };
+            if (token) {
+                headers.Authorization = `Bearer ${token}`;
+            }
+
             const response = await fetch(`${import.meta.env.VITE_API_URL}/api/items`, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    Accept: 'application/json',
-                    Authorization: token ? `Bearer ${token}` : '',
-                },
-                body: JSON.stringify({
-                    name,
-                    description: description || null,
-                    category,
-                    color: color || null,
-                    brand: brand || null,
-                    location,
-                    finder_id: currentUser.id,
-                    found_at: foundAt || null,
-                }),
+                headers,
+                body: formData,
             });
 
-            const data = await response.json();
+            const responseText = await response.text();
+            let data = null;
+            try {
+                data = responseText ? JSON.parse(responseText) : null;
+            } catch {
+                data = null;
+            }
 
             if (!response.ok) {
-                if (data.errors) {
+                console.error('Add item failed:', response.status, responseText, data);
+                if (data?.errors) {
                     const firstError = Object.values(data.errors)[0];
                     if (Array.isArray(firstError) && firstError.length > 0) {
                         setError(firstError[0]);
@@ -115,7 +193,7 @@ function AddItemPage() {
                         setError(data.message || 'Failed to add item.');
                     }
                 } else {
-                    setError(data.message || 'Failed to add item.');
+                    setError(data?.message || responseText || 'Failed to add item.');
                 }
                 return;
             }
@@ -238,6 +316,32 @@ function AddItemPage() {
                                     onChange={(e) => setBrand(e.target.value)}
                                     placeholder="Optional"
                                 />
+                            </div>
+
+                            <div className="mb-3">
+                                <label className="form-label text-primaryLight fw-semibold">
+                                    Item Photo <span className="text-muted" style={{fontWeight:400, fontSize:'0.95em'}}>(max 10MB)</span>
+                                </label>
+                                <input
+                                    type="file"
+                                    name="image"
+                                    accept="image/*"
+                                    className="form-control custom-input"
+                                    onChange={handleImageChange}
+                                />
+                                {imageError && (
+                                    <div className="text-danger small mt-2">
+                                        {imageError}
+                                    </div>
+                                )}
+                                {imagePreview && (
+                                    <img
+                                        src={imagePreview}
+                                        alt="Item preview"
+                                        className="img-fluid rounded mt-3"
+                                        style={{ maxHeight: '220px' }}
+                                    />
+                                )}
                             </div>
 
                             <div className="mb-4">

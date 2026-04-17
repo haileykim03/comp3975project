@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Item;
 use App\Models\ReturnLog;
+use Cloudinary\Cloudinary;
 use Illuminate\Http\Request;
 
 class ItemController extends Controller
@@ -26,7 +27,22 @@ class ItemController extends Controller
             'location' => 'required|string|max:255',
             'finder_id' => 'required|exists:users,id',
             'found_at' => 'nullable|date',
+            'image' => 'nullable|image|max:12288',
         ]);
+
+        \Log::error('Validation passed, uploading image', ['has_image' => $request->hasFile('image')]);
+
+        try {
+            $imageData = $this->uploadImageToCloudinary($request->file('image'));
+        } catch (\Exception $e) {
+            \Log::error('Image upload failed', ['error' => $e->getMessage(), 'file' => $request->file('image') ? $request->file('image')->getClientOriginalName() : 'no file']);
+            return response()->json([
+                'message' => 'The image failed to upload.',
+                'errors' => [
+                    'image' => ['The image failed to upload.']
+                ]
+            ], 422);
+        }
 
         $item = Item::create([
             'name' => $request->name,
@@ -35,6 +51,8 @@ class ItemController extends Controller
             'color' => $request->color,
             'brand' => $request->brand,
             'location' => $request->location,
+            'image_url' => $imageData['url'] ?? null,
+            'image_public_id' => $imageData['public_id'] ?? null,
             'finder_id' => $request->finder_id,
             'owner_id' => null,
             'status' => 'pending',
@@ -70,6 +88,7 @@ class ItemController extends Controller
             'owner_id' => 'nullable|exists:users,id',
             'status' => 'required|in:pending,active,claim pending,returned',
             'found_at' => 'nullable|date',
+            'image' => 'nullable|image|max:12288',
         ]);
 
         $isClaimRequest =
@@ -88,6 +107,22 @@ class ItemController extends Controller
                     'message' => 'This item has already been claimed by another user.',
                 ], 409);
             }
+        }
+
+        try {
+            $imageData = $this->uploadImageToCloudinary($request->file('image'), $item->image_public_id);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => 'The image failed to upload.',
+                'errors' => [
+                    'image' => ['The image failed to upload.']
+                ]
+            ], 422);
+        }
+
+        if ($imageData !== null) {
+            $validated['image_url'] = $imageData['url'];
+            $validated['image_public_id'] = $imageData['public_id'];
         }
 
         $wasReturnedBefore = $item->status === 'returned';
@@ -155,10 +190,70 @@ class ItemController extends Controller
             return response()->json(['message' => 'Item not found'], 404);
         }
 
+        if ($item->image_public_id) {
+            $this->deleteCloudinaryImage($item->image_public_id);
+        }
+
         $item->delete();
 
         return response()->json([
             'success' => true,
         ]);
+    }
+
+    private function uploadImageToCloudinary($image, ?string $existingPublicId = null): ?array
+    {
+        if (!$image) {
+            return null;
+        }
+
+        \Log::error('Uploading image to Cloudinary', ['file' => $image->getClientOriginalName(), 'size' => $image->getSize(), 'mime' => $image->getMimeType()]);
+
+        $config = [
+            'cloud' => [
+                'cloud_name' => config('services.cloudinary.cloud_name'),
+                'api_key' => config('services.cloudinary.api_key'),
+                'api_secret' => config('services.cloudinary.api_secret'),
+            ],
+        ];
+
+        $cloudinary = new Cloudinary($config);
+
+        if ($existingPublicId) {
+            $this->deleteCloudinaryImage($existingPublicId);
+        }
+
+        try {
+            $uploadResult = $cloudinary->uploadApi()->upload($image->getRealPath(), [
+                'folder' => 'bcit_lost_found/items',
+                'public_id' => 'item_' . uniqid(),
+                'overwrite' => true,
+                'resource_type' => 'auto',
+            ]);
+
+            \Log::error('Cloudinary upload result', ['result' => $uploadResult]);
+
+            return [
+                'url' => $uploadResult['secure_url'] ?? $uploadResult['url'] ?? null,
+                'public_id' => $uploadResult['public_id'] ?? null,
+            ];
+        } catch (\Exception $e) {
+            \Log::error('Cloudinary upload exception', ['error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            throw $e;
+        }
+    }
+
+    private function deleteCloudinaryImage(string $publicId): void
+    {
+        $config = [
+            'cloud' => [
+                'cloud_name' => config('services.cloudinary.cloud_name'),
+                'api_key' => config('services.cloudinary.api_key'),
+                'api_secret' => config('services.cloudinary.api_secret'),
+            ],
+        ];
+
+        $cloudinary = new Cloudinary($config);
+        $cloudinary->uploadApi()->destroy($publicId, ['resource_type' => 'image']);
     }
 }

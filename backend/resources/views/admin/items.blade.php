@@ -96,8 +96,21 @@
                                         <p><strong>Brand:</strong> {{ $item->brand ?? 'N/A' }}</p>
                                         <p><strong>Finder ID:</strong> {{ $item->finder?->student_id ?? 'N/A' }}</p>
                                         <p><strong>Owner ID:</strong> {{ $item->owner?->student_id ?? 'N/A' }}</p>
+                                        <p><strong>Found At:</strong> {{ $item->found_at ? $item->found_at->format('Y-m-d H:i') : 'N/A' }}</p>
+                                        <p><strong>Description:</strong> {{ $item->description ?? 'N/A' }}</p>
                                         <p><strong>Current Status:</strong> <span class="font-bold text-blue-600">{{ ucfirst($item->status) }}</span></p>
                                     </div>
+
+                                    @if($item->image_url)
+                                    <div class="mb-6 border-b pb-4">
+                                        <p class="font-bold text-sm text-gray-700 mb-3">Item Image</p>
+                                        <img 
+                                            src="{{ $item->image_url }}" 
+                                            alt="{{ $item->name }}" 
+                                            class="max-h-64 rounded-lg border border-gray-300 object-cover"
+                                        />
+                                    </div>
+                                    @endif
 
                                     @if(in_array(strtolower($item->status), ['pending', 'claim pending']))
                                     <form action="{{ route('admin.items.updateStatus', $item->id) }}" method="POST" class="mb-4">

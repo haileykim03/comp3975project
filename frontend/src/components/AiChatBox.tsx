@@ -5,6 +5,19 @@ import type {
     StructuredData,
 } from '../types/ai';
 
+const categoryOptions = [
+    'Wallet',
+    'Backpack',
+    'Keys',
+    'Phone',
+    'Earbuds',
+    'Laptop',
+    'ID',
+    'Bottle',
+    'Headphones',
+    'Others',
+];
+
 interface AiChatBoxProps {
     token: string;
     onResult: (result: AiChatResponse) => void;
@@ -21,13 +34,20 @@ function AiChatBox({ token, onResult }: AiChatBoxProps) {
         },
     ]);
     const [structuredData, setStructuredData] = useState<StructuredData | null>(null);
+    const [imageFile, setImageFile] = useState<File | null>(null);
+    const [imagePreview, setImagePreview] = useState('');
+    const [selectedCategory, setSelectedCategory] = useState(categoryOptions[0]);
 
     const apiBaseUrl = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8000';
-    const messagesEndRef = useRef<HTMLDivElement | null>(null);
     const inputRef = useRef<HTMLTextAreaElement | null>(null);
+    const fileInputRef = useRef<HTMLInputElement | null>(null);
+    const chatContainerRef = useRef<HTMLDivElement | null>(null);
 
     useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        const el = chatContainerRef.current;
+        if (el) {
+            el.scrollTop = el.scrollHeight;
+        }
     }, [messages, loading]);
 
     useEffect(() => {
@@ -38,6 +58,108 @@ function AiChatBox({ token, onResult }: AiChatBoxProps) {
         setTimeout(() => {
             inputRef.current?.focus();
         }, 0);
+    };
+
+    const resetChat = () => {
+        setMessages([
+            {
+                role: 'assistant',
+                content: 'Tell me about the item you lost.',
+            },
+        ]);
+        setStructuredData(null);
+        setMessage('');
+        setImageFile(null);
+        setImagePreview('');
+        setErrorMessage('');
+        onResult({
+            structured_data: null,
+            matches: [],
+            assistant_reply: 'Tell me about the item you lost.',
+            conversation_messages: [],
+        });
+        focusInput();
+    };
+
+    const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0] ?? null;
+        
+        if (!file) {
+            setImageFile(null);
+            setImagePreview('');
+            return;
+        }
+
+        if (!file.type.startsWith('image/')) {
+            setErrorMessage('Please select a valid image file.');
+            setImageFile(null);
+            setImagePreview('');
+            return;
+        }
+
+        if (file.size > 10 * 1024 * 1024) {
+            setErrorMessage('Image file size must be 10MB or smaller.');
+            setImageFile(null);
+            setImagePreview('');
+            return;
+        }
+
+        setImageFile(file);
+        setImagePreview(URL.createObjectURL(file));
+        setErrorMessage('');
+    };
+
+    const handleImageSearch = async () => {
+        if (!imageFile || loading) return;
+
+        const formData = new FormData();
+        formData.append('image', imageFile);
+        formData.append('category', selectedCategory);
+
+        setLoading(true);
+        setErrorMessage('');
+
+        try {
+            const response = await fetch(`${apiBaseUrl}/api/ai/search-by-image`, {
+                method: 'POST',
+                headers: {
+                    Accept: 'application/json',
+                    Authorization: `Bearer ${token}`,
+                },
+                body: formData,
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.message || 'Failed to search by image.');
+            }
+
+            const result = data as AiChatResponse;
+            setStructuredData(result.structured_data);
+            
+            const chatMessages: ChatMessage[] = [
+                ...messages,
+                {
+                    role: 'user',
+                    content: '[Uploaded an image for search]',
+                },
+                {
+                    role: 'assistant',
+                    content: result.assistant_reply,
+                },
+            ];
+
+            setMessages(chatMessages);
+            setImageFile(null);
+            setImagePreview('');
+            onResult({ ...result, conversation_messages: chatMessages });
+        } catch (error) {
+            const text = error instanceof Error ? error.message : 'Something went wrong.';
+            setErrorMessage(text);
+        } finally {
+            setLoading(false);
+        }
     };
 
     const sendMessage = async () => {
@@ -129,6 +251,7 @@ function AiChatBox({ token, onResult }: AiChatBoxProps) {
                 style={{ height: '600px', display: 'flex', flexDirection: 'column' }}
             >
                 <div
+                    ref={chatContainerRef}
                     className="flex-grow-1 px-3 pt-3"
                     style={{
                         overflowY: 'auto',
@@ -172,8 +295,6 @@ function AiChatBox({ token, onResult }: AiChatBoxProps) {
                             </div>
                         </div>
                     )}
-
-                    <div ref={messagesEndRef}></div>
                 </div>
 
                 <div className="border-top p-3 bg-white">
@@ -183,28 +304,103 @@ function AiChatBox({ token, onResult }: AiChatBoxProps) {
                         </div>
                     )}
 
-                    <form onSubmit={handleSubmit}>
-                        <div className="d-flex gap-2 align-items-end">
-                            <textarea
-                                ref={inputRef}
-                                className="form-control rounded-4"
-                                rows={2}
-                                value={message}
-                                onChange={(event) => setMessage(event.target.value)}
-                                onKeyDown={handleKeyDown}
-                                placeholder="Describe your lost item..."
-                                style={{ resize: 'none' }}
+                    {imagePreview && (
+                        <div className="mb-3">
+                            <img 
+                                src={imagePreview} 
+                                alt="Selected" 
+                                className="img-fluid rounded"
+                                style={{maxHeight: '200px'}}
                             />
+                            <div className="mt-3 mb-3">
+                                <label className="form-label small fw-semibold mb-2">Item Category</label>
+                                <select 
+                                    className="form-select form-select-sm"
+                                    value={selectedCategory}
+                                    onChange={(e) => setSelectedCategory(e.target.value)}
+                                >
+                                    {categoryOptions.map((cat) => (
+                                        <option key={cat} value={cat}>{cat}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="d-flex gap-2 mt-2">
+                                <button
+                                    type="button"
+                                    onClick={handleImageSearch}
+                                    className="btn btn-success rounded-4 flex-grow-1"
+                                    disabled={loading}
+                                >
+                                    {loading ? 'Searching...' : 'Search by Image'}
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setImageFile(null);
+                                        setImagePreview('');
+                                        if (fileInputRef.current) fileInputRef.current.value = '';
+                                    }}
+                                    className="btn btn-secondary rounded-4"
+                                    disabled={loading}
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    )}
 
+                    {structuredData && !structuredData.needs_followup ? (
+                        <div className="d-flex gap-2">
                             <button
-                                type="submit"
-                                className="btn btn-dark rounded-4 px-4"
-                                disabled={loading || !message.trim()}
+                                type="button"
+                                onClick={resetChat}
+                                className="btn btn-primary flex-grow-1 rounded-4"
                             >
-                                {loading ? 'Sending...' : 'Send'}
+                                Start New Search
                             </button>
                         </div>
-                    </form>
+                    ) : (
+                        <form onSubmit={handleSubmit}>
+                            <div className="d-flex gap-2 align-items-end">
+                                <textarea
+                                    ref={inputRef}
+                                    className="form-control rounded-4"
+                                    rows={2}
+                                    value={message}
+                                    onChange={(event) => setMessage(event.target.value)}
+                                    onKeyDown={handleKeyDown}
+                                    placeholder="Describe your lost item..."
+                                    style={{ resize: 'none' }}
+                                />
+
+                                <button
+                                    type="button"
+                                    className="btn btn-outline-secondary rounded-4"
+                                    onClick={() => fileInputRef.current?.click()}
+                                    disabled={loading}
+                                    title="Upload image to search"
+                                >
+                                    📸
+                                </button>
+
+                                <input
+                                    ref={fileInputRef}
+                                    type="file"
+                                    accept="image/*"
+                                    className="d-none"
+                                    onChange={handleImageChange}
+                                />
+
+                                <button
+                                    type="submit"
+                                    className="btn btn-dark rounded-4 px-4"
+                                    disabled={loading || !message.trim()}
+                                >
+                                    {loading ? 'Sending...' : 'Send'}
+                                </button>
+                            </div>
+                        </form>
+                    )}
                 </div>
             </div>
         </div>

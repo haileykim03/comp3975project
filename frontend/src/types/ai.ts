@@ -4,6 +4,7 @@ export interface StructuredData {
     color: string | null;
     brand: string | null;
     location: string | null;
+    lost_time: string | null;
     keywords: string[];
     attributes: string[];
     skipped_fields: string[];
@@ -23,6 +24,7 @@ export interface MatchItem {
     finder_id: number | null;
     owner_id: number | null;
     found_at: string | null;
+    image_url: string | null;
     similarity_score: number;
 }
 
@@ -32,23 +34,8 @@ export interface ChatMessage {
 }
 
 export interface AiChatResponse {
-    structured_data: StructuredData;
+    structured_data: StructuredData | null;
     matches: MatchItem[];
     assistant_reply: string;
     conversation_messages: ChatMessage[];
-}
-
-export interface StructuredData {
-    item_type: string | null;
-    category: string | null;
-    color: string | null;
-    brand: string | null;
-    location: string | null;
-    lost_time: string | null;
-    keywords: string[];
-    attributes: string[];
-    skipped_fields: string[];
-    last_requested_field: string | null;
-    needs_followup: boolean;
-    followup_question: string | null;
 }

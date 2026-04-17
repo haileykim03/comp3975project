@@ -5,6 +5,8 @@ server {
     root /home/site/wwwroot/public;
     index index.php index.html index.htm;
 
+    client_max_body_size 15M;
+
     location / {
         try_files $uri $uri/ /index.php?$args;
     }

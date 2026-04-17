@@ -9,6 +9,7 @@ import ItemsListPage from './pages/ItemsListPage';
 import AddItemPage from './pages/AddItemPage';
 import MyClaimsPage from './pages/MyClaimsPage';
 import MyAddedItemsPage from './pages/MyAddedItemsPage';
+import NotFoundPage from './pages/NotFoundPage';
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
         <Route path="/add-item" element={<AddItemPage />} />
         <Route path="/my-claims" element={<MyClaimsPage />} />
         <Route path="/my-added-items" element={<MyAddedItemsPage />} />
+        <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </BrowserRouter>
   );
